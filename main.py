@@ -3,32 +3,32 @@ import httpx
 from fastapi import FastAPI, Request
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, ListToolsResult, CallToolResult
 
 # 1. MCPサーバーの初期化
 mcp_server = Server("weather-mcp-server")
 
-# 2. 利用可能なツールの定義
-@mcp_server.list_tools()
-async def handle_list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="get_weather",
-            description="指定された緯度・経度の現在の天気を取得します",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "latitude": {"type": "number", "description": "緯度"},
-                    "longitude": {"type": "number", "description": "経度"}
-                },
-                "required": ["latitude", "longitude"]
-            }
-        )
-    ]
+# 2. 利用可能なツールの定義ハンドラー
+async def list_tools_handler():
+    return ListToolsResult(
+        tools=[
+            Tool(
+                name="get_weather",
+                description="指定された緯度・経度の現在の天気を取得します",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "latitude": {"type": "number", "description": "緯度"},
+                        "longitude": {"type": "number", "description": "経度"}
+                    },
+                    "required": ["latitude", "longitude"]
+                }
+            )
+        ]
+    )
 
-# 3. ツール実行ロジックの実装
-@mcp_server.call_tool()
-async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
+# 3. ツール実行ロジックのハンドラー
+async def call_tool_handler(name: str, arguments: dict | None):
     if name == "get_weather":
         args = arguments or {}
         lat = args.get("latitude")
@@ -41,15 +41,23 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
             data = res.json()
 
         if "current_weather" not in data:
-            return [TextContent(type="text", text="天気情報の取得に失敗しました。")]
+            return CallToolResult(
+                content=[TextContent(type="text", text="天気情報の取得に失敗しました。")]
+            )
 
         cw = data["current_weather"]
         result_text = f"気温: {cw['temperature']}°C, 風速: {cw['windspeed']}km/h"
-        return [TextContent(type="text", text=result_text)]
+        return CallToolResult(
+            content=[TextContent(type="text", text=result_text)]
+        )
 
     raise ValueError(f"Unknown tool: {name}")
 
-# 4. FastAPIアプリとSSE通信の設定
+# 4. ハンドラーの直接セット（ここがポイント！）
+mcp_server.list_tools = list_tools_handler
+mcp_server.call_tool = call_tool_handler
+
+# 5. FastAPIアプリとSSE通信の設定
 app = FastAPI()
 sse = SseServerTransport("/messages")
 
