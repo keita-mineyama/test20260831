@@ -3,12 +3,14 @@ import httpx
 from fastapi import FastAPI, Request
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, CallToolRequestSchema, ListToolsRequestSchema
 
+# 1. MCPサーバーの初期化
 mcp_server = Server("weather-mcp-server")
 
+# 2. 利用可能なツールの定義（最新SDK対応の書き方）
 @mcp_server.list_tools()
-async def list_tools():
+async def handle_list_tools():
     return [
         Tool(
             name="get_weather",
@@ -24,8 +26,30 @@ async def list_tools():
         )
     ]
 
-@mcp_server.call_tool()
-async def call_tool(name: str, arguments: dict):
+# もし上記でダメな場合（Low-level APIの互換性対策）
+# 以下のハンドラー形式で登録します
+async def list_tools_handler(request):
+    return {
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "指定された緯度・経度の現在の天気を取得します",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "latitude": {"type": "number", "description": "緯度"},
+                        "longitude": {"type": "number", "description": "経度"}
+                    },
+                    "required": ["latitude", "longitude"]
+                }
+            }
+        ]
+    }
+
+async def call_tool_handler(request):
+    name = request.params.name
+    arguments = request.params.arguments or {}
+    
     if name == "get_weather":
         lat = arguments.get("latitude")
         lon = arguments.get("longitude")
@@ -36,11 +60,22 @@ async def call_tool(name: str, arguments: dict):
             data = res.json()
 
         if "current_weather" not in data:
-            return [TextContent(type="text", text="失敗しました")]
+            return {"content": [{"type": "text", "text": "失敗しました"}]}
 
         cw = data["current_weather"]
-        return [TextContent(type="text", text=f"気温: {cw['temperature']}°C, 風速: {cw['windspeed']}km/h")]
+        return {
+            "content": [
+                {"type": "text", "text": f"気温: {cw['temperature']}°C, 風速: {cw['windspeed']}km/h"}
+            ]
+        }
 
+    raise ValueError(f"Unknown tool: {name}")
+
+# ハンドラーの設定
+mcp_server.set_request_handler(ListToolsRequestSchema, list_tools_handler)
+mcp_server.set_request_handler(CallToolRequestSchema, call_tool_handler)
+
+# FastAPIアプリの設定
 app = FastAPI()
 sse = SseServerTransport("/messages")
 
@@ -55,4 +90,5 @@ async def handle_messages(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
