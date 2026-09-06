@@ -1,8 +1,10 @@
 import os
 import httpx
+from fastapi import FastAPI, Request
 from mcp.server.mcpserver import MCPServer
+from mcp.server.sse import SseServerTransport
 
-# 1. MCPServer（mcp 2.x最新版）の初期化
+# 1. MCPServer の初期化
 mcp = MCPServer("weather-mcp-server")
 
 # 2. ツールの登録
@@ -26,7 +28,28 @@ async def get_weather(latitude: float, longitude: float) -> str:
     cw = data["current_weather"]
     return f"気温: {cw['temperature']}°C, 風速: {cw['windspeed']}km/h"
 
+# 3. FastAPI と SSE トランスポートの構築
+app = FastAPI()
+sse_transport = SseServerTransport("/messages")
+
+# GET /sse -> SSE接続を確立するエンドポイント
+@app.get("/sse")
+async def handle_sse(request: Request):
+    async with sse_transport.connect_sse(
+        request.scope, request.receive, request._send
+    ) as streams:
+        await mcp._mcp_server.run(
+            streams[0], streams[1], mcp._mcp_server.create_initialization_options()
+        )
+
+# POST /messages -> メッセージを受け取るエンドポイント
+@app.post("/messages")
+async def handle_messages(request: Request):
+    await sse_transport.handle_post_message(
+        request.scope, request.receive, request._send
+    )
+
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.environ.get("PORT", 10000))
-    # SSEモードでサーバー起動（自動的に /sse エンドポイントが作られます）
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port)
