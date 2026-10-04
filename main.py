@@ -28,24 +28,33 @@ async def get_weather(latitude: float, longitude: float) -> str:
     cw = data["current_weather"]
     return f"気温: {cw['temperature']}°C, 風速: {cw['windspeed']}km/h"
 
-# 3. FastAPI と SSE トランスポートの構築
+# 3. FastAPI アプリの設定
 app = FastAPI()
-sse_transport = SseServerTransport("/messages")
 
-# GET /sse -> SSE接続を確立するエンドポイント
+# GET /sse -> Dify からの初期接続を受け付ける
 @app.get("/sse")
 async def handle_sse(request: Request):
-    async with sse_transport.connect_sse(
+    # リクエストのヘッダー情報からスキーム（https）とホスト名を取得し、完全な絶対URLを構築
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.netloc)
+    endpoint_url = f"{scheme}://{host}/messages"
+
+    # 完全なURL（https://test20260831.onrender.com/messages）を指定してTransportを作成
+    transport = SseServerTransport(endpoint_url)
+
+    async with transport.connect_sse(
         request.scope, request.receive, request._send
     ) as streams:
         await mcp._mcp_server.run(
             streams[0], streams[1], mcp._mcp_server.create_initialization_options()
         )
 
-# POST /messages -> メッセージを受け取るエンドポイント
+# POST /messages -> Dify からのツール実行命令を受け取る
 @app.post("/messages")
 async def handle_messages(request: Request):
-    await sse_transport.handle_post_message(
+    # POST処理用にもダミーのTransportを用意してメッセージを通過させる
+    transport = SseServerTransport("/messages")
+    await transport.handle_post_message(
         request.scope, request.receive, request._send
     )
 
