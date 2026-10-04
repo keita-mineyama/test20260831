@@ -1,9 +1,6 @@
 import os
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
 from mcp.server.mcpserver import MCPServer
-from mcp.server.sse import SseServerTransport
 
 # 1. MCPServer の初期化
 mcp = MCPServer("weather-mcp-server")
@@ -29,38 +26,8 @@ async def get_weather(latitude: float, longitude: float) -> str:
     cw = data["current_weather"]
     return f"気温: {cw['temperature']}°C, 風速: {cw['windspeed']}km/h"
 
-# 3. FastAPI と SSE トランスポートの設定
-app = FastAPI()
-sse_transport = SseServerTransport("/messages")
-
-# GET /sse -> Dify からの初期接続を受け付ける
-@app.get("/sse")
-async def handle_sse(request: Request):
-    async with sse_transport.connect_sse(
-        request.scope, request.receive, request._send
-    ) as streams:
-        await mcp._mcp_server.run(
-            streams[0], streams[1], mcp._mcp_server.create_initialization_options()
-        )
-
-# レスポンスヘッダーでバッファリングを防止するためのミドルウェア
-@app.middleware("http")
-async def add_send_header(request: Request, call_next):
-    response = await call_next(request)
-    if request.url.path == "/sse":
-        # CloudflareやNginx/Renderのバッファリングを無効化するヘッダーを付与
-        response.headers["X-Accel-Buffering"] = "no"
-        response.headers["Cache-Control"] = "no-cache, no-transform"
-    return response
-
-# POST /messages -> Dify からのツール実行命令を受け取る
-@app.post("/messages")
-async def handle_messages(request: Request):
-    await sse_transport.handle_post_message(
-        request.scope, request.receive, request._send
-    )
-
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # MCPServer 標準の SSE サーバー機能で起動
+    # これにより自動的に /sse と /messages エンドポイントが構築されます
+    mcp.run(transport="sse", host="0.0.0.0", port=port)
