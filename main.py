@@ -1,6 +1,7 @@
 import os
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from mcp.server.mcpserver import MCPServer
 from mcp.server.sse import SseServerTransport
 
@@ -28,33 +29,34 @@ async def get_weather(latitude: float, longitude: float) -> str:
     cw = data["current_weather"]
     return f"気温: {cw['temperature']}°C, 風速: {cw['windspeed']}km/h"
 
-# 3. FastAPI アプリの設定
+# 3. FastAPI と SSE トランスポートの設定
 app = FastAPI()
+sse_transport = SseServerTransport("/messages")
 
 # GET /sse -> Dify からの初期接続を受け付ける
 @app.get("/sse")
 async def handle_sse(request: Request):
-    # リクエストのヘッダー情報からスキーム（https）とホスト名を取得し、完全な絶対URLを構築
-    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-    host = request.headers.get("x-forwarded-host", request.url.netloc)
-    endpoint_url = f"{scheme}://{host}/messages"
-
-    # 完全なURL（https://test20260831.onrender.com/messages）を指定してTransportを作成
-    transport = SseServerTransport(endpoint_url)
-
-    async with transport.connect_sse(
+    async with sse_transport.connect_sse(
         request.scope, request.receive, request._send
     ) as streams:
         await mcp._mcp_server.run(
             streams[0], streams[1], mcp._mcp_server.create_initialization_options()
         )
 
+# レスポンスヘッダーでバッファリングを防止するためのミドルウェア
+@app.middleware("http")
+async def add_send_header(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/sse":
+        # CloudflareやNginx/Renderのバッファリングを無効化するヘッダーを付与
+        response.headers["X-Accel-Buffering"] = "no"
+        response.headers["Cache-Control"] = "no-cache, no-transform"
+    return response
+
 # POST /messages -> Dify からのツール実行命令を受け取る
 @app.post("/messages")
 async def handle_messages(request: Request):
-    # POST処理用にもダミーのTransportを用意してメッセージを通過させる
-    transport = SseServerTransport("/messages")
-    await transport.handle_post_message(
+    await sse_transport.handle_post_message(
         request.scope, request.receive, request._send
     )
 
